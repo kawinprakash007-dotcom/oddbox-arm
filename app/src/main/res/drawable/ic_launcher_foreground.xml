@@ -1,0 +1,39 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Robotic Arm Icon -->
+    <!-- Base -->
+    <path
+        android:fillColor="#0284C7"
+        android:pathData="M30,82 L78,82 L74,74 L34,74 Z" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M46,74 L62,74 L60,62 L48,62 Z" />
+    <!-- Lower Arm Segment -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M54,62 L42,42" />
+    <!-- Shoulder Pivot -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M42,42 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <!-- Upper Arm Segment -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M42,42 L66,30" />
+    <!-- Wrist Pivot -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M66,30 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <!-- End effector / Magnet -->
+    <path
+        android:fillColor="#EF4444"
+        android:pathData="M63,30 L69,30 L71,40 L61,40 Z" />
+</vector>
+

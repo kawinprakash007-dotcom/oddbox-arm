@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">ODDBOX Arm Controller</string>
+    <string name="title_arm_controller">ODDBOX ARM CONTROLLER</string>
+    <string name="subtitle_robotic_arm">3-AXIS PICK &amp; PLACE SYSTEM</string>
+    <string name="status_disconnected">DISCONNECTED</string>
+    <string name="status_scanning">SCANNING…</string>
+    <string name="status_connecting">CONNECTING…</string>
+    <string name="status_connected">CONNECTED</string>
+    <string name="action_scan">SCAN</string>
+    <string name="action_connect">CONNECT</string>
+    <string name="action_disconnect">DISCONNECT</string>
+    <string name="estop_button">EMERGENCY STOP</string>
+    <string name="magnet_warning">WARNING: ELECTROMAGNET ENERGIZED</string>
+    <string name="position_estimate_warning">Notice: Displayed servo angles reflect telemetry feedback or commanded estimates. Verify physical clearance before operation.</string>
+</resources>
+
