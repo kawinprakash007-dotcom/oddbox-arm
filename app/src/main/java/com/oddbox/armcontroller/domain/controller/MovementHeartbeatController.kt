@@ -12,8 +12,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 class MovementHeartbeatController(
     private val scope: CoroutineScope,
@@ -23,76 +21,74 @@ class MovementHeartbeatController(
     private val _activeDirection = MutableStateFlow<ArmDirection?>(null)
     val activeDirection: StateFlow<ArmDirection?> = _activeDirection.asStateFlow()
 
-    private var heartbeatJob: Job? = null
-    private val controllerMutex = Mutex()
+    // Single serialized control job — replaced atomically on each press/release.
+    // Using a plain @Volatile reference avoids the mutex-ordering race where
+    // stopMovement's launch() can be scheduled before startMovement's inner work
+    // executes, letting a direction command leak out after the STOP.
+    @Volatile private var heartbeatJob: Job? = null
 
     /**
-     * Triggered immediately when user touches down on a direction button.
+     * Called from the UI thread (Compose pointer input) on finger-DOWN.
+     * Cancels any existing movement job first, marks the new direction, then
+     * starts the heartbeat loop. The initial command and all heartbeats run
+     * inside the job so they are automatically cancelled on release.
      */
     fun startMovement(direction: ArmDirection) {
-        scope.launch {
-            controllerMutex.withLock {
-                // If a conflicting direction is already active, stop it first
-                val current = _activeDirection.value
-                if (current != null && current != direction) {
-                    heartbeatJob?.cancel()
-                    sendCommandAction(ArmCommand.STOP)
+        // Cancel whatever was running (may already be null — that's fine)
+        heartbeatJob?.cancel()
+
+        _activeDirection.value = direction
+
+        heartbeatJob = scope.launch(Dispatchers.Default) {
+            try {
+                // 1. Send the first command immediately on press
+                sendCommandAction(direction.command)
+
+                // 2. Heartbeat: keep refreshing well inside the 600ms ESP32 watchdog
+                while (isActive) {
+                    delay(heartbeatIntervalMs)
+                    if (isActive) sendCommandAction(direction.command)
                 }
-
-                _activeDirection.value = direction
-                heartbeatJob?.cancel()
-
-                heartbeatJob = scope.launch(Dispatchers.Default) {
-                    try {
-                        // 1. Initial burst command
-                        sendCommandAction(direction.command)
-
-                        // 2. Periodic heartbeat while held (before 600ms firmware watchdog)
-                        while (isActive) {
-                            delay(heartbeatIntervalMs)
-                            if (isActive) {
-                                sendCommandAction(direction.command)
-                            }
-                        }
-                    } finally {
-                        // Guarantee STOP is sent if coroutine was cancelled
-                        // (unless another direction superseded it within the lock)
-                    }
-                }
+            } finally {
+                // finally{} runs when the job is cancelled (finger released)
+                // or when the coroutine finishes naturally.
+                // Do NOT send STOP here — stopMovement() sends it explicitly
+                // so we don't double-stop if another direction supersedes this one.
             }
         }
     }
 
     /**
-     * Triggered immediately when finger releases or gesture cancels.
+     * Called from the UI thread (Compose pointer input) on finger-UP or gesture
+     * cancellation. Cancels the heartbeat immediately, clears the active
+     * direction, and sends STOP. Passing [direction] makes it a no-op when a
+     * *different* direction has already taken over (multi-touch safety).
      */
     fun stopMovement(direction: ArmDirection? = null) {
-        scope.launch {
-            controllerMutex.withLock {
-                val current = _activeDirection.value
-                // If direction specified, only stop if it matches the active one
-                if (direction == null || current == direction) {
-                    heartbeatJob?.cancel()
-                    heartbeatJob = null
-                    _activeDirection.value = null
-                    // Immediately send STOP command
-                    sendCommandAction(ArmCommand.STOP)
-                }
-            }
+        val current = _activeDirection.value
+        if (direction != null && current != direction) return  // different axis — ignore
+
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        _activeDirection.value = null
+
+        // Send STOP asynchronously — avoids blocking the UI thread
+        scope.launch(Dispatchers.Default) {
+            sendCommandAction(ArmCommand.STOP)
         }
     }
 
     /**
-     * Force stop all movement (e.g. app backgrounding, screen navigation, or disconnect).
+     * Force-stops everything: app backgrounding, disconnect, ESTOP reset.
+     * Safe to call from any thread.
      */
     fun forceStop() {
-        scope.launch {
-            controllerMutex.withLock {
-                heartbeatJob?.cancel()
-                heartbeatJob = null
-                _activeDirection.value = null
-                sendCommandAction(ArmCommand.STOP)
-            }
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        _activeDirection.value = null
+
+        scope.launch(Dispatchers.Default) {
+            sendCommandAction(ArmCommand.STOP)
         }
     }
 }

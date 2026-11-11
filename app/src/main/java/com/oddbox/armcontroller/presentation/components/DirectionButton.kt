@@ -5,8 +5,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,6 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +57,17 @@ fun DirectionButton(
     val view = LocalView.current
     var isPressedLocally by remember { mutableStateOf(false) }
     val isPressed = (isPressedLocally || isExternalActive) && enabled
+
+    // Safety net: if the button is disabled while a press is in flight
+    // (e.g. ESTOP fires, BLE disconnects) make sure we clear local state
+    // and notify the caller so movement stops.
+    DisposableEffect(enabled) {
+        if (!enabled && isPressedLocally) {
+            isPressedLocally = false
+            onRelease()
+        }
+        onDispose {}
+    }
 
     val scale by animateFloatAsState(
         targetValue = if (isPressed) 0.95f else 1.0f,
@@ -88,16 +101,32 @@ fun DirectionButton(
             .defaultMinSize(minHeight = 54.dp)
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
-                awaitPointerEventScope {
-                    while (true) {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        isPressedLocally = true
-                        try {
-                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                        } catch (_: Exception) {}
-                        onPress()
+                // awaitEachGesture restarts the block after each gesture completes,
+                // ensuring the button is always ready for the next press.
+                awaitEachGesture {
+                    // Wait for a finger-down event
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
 
-                        val upOrCancel = waitForUpOrCancellation()
+                    isPressedLocally = true
+                    try {
+                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    } catch (_: Exception) {}
+                    onPress()
+
+                    // Wait for all fingers on this pointer to lift OR gesture cancellation.
+                    // This handles: normal lift, slide-off-screen, system interrupt, two-finger.
+                    try {
+                        do {
+                            val event = awaitPointerEvent()
+                            val allUp = event.changes.all { !it.pressed }
+                            if (allUp) {
+                                event.changes.forEach { it.consume() }
+                                break
+                            }
+                        } while (true)
+                    } finally {
+                        // finally{} guarantees release fires even on coroutine cancellation
                         isPressedLocally = false
                         try {
                             view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
@@ -146,4 +175,5 @@ fun DirectionButton(
         }
     }
 }
+
 
