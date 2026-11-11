@@ -323,6 +323,42 @@ class BleManager(
         }
     }
 
+    fun currentMovementEpoch(): Long = commandQueue.currentMovementEpoch()
+
+    fun invalidateMovementQueue(reason: String): Long =
+        commandQueue.invalidatePendingMovement(reason)
+
+    /**
+     * Synchronously invalidates pending directional commands and queues STOP with highest
+     * priority without waiting for coroutine dispatch. Safe on Main/UI thread.
+     */
+    fun queueStopImmediate(reason: String = "Release") {
+        if (_connectionState.value != BleConnectionState.CONNECTED) {
+            commandQueue.invalidatePendingMovement(reason)
+            return
+        }
+        commandQueue.queueStopNow(reason)
+    }
+
+    /**
+     * Transmit an epoch-bound directional movement command through the serialized queue.
+     */
+    suspend fun sendMovementCommand(command: String, epoch: Long): Boolean {
+        if (_connectionState.value != BleConnectionState.CONNECTED) {
+            return false
+        }
+        val sent = commandQueue.enqueueMovement(command, epoch)
+        if (sent) {
+            log(BleLogType.TX_CMD, "TX: $command")
+        } else if (epoch == commandQueue.currentMovementEpoch() &&
+            _connectionState.value == BleConnectionState.CONNECTED
+        ) {
+            // Only log failure if this command wasn't intentionally superseded by STOP/disconnect.
+            log(BleLogType.ERROR, "TX FAILED: $command")
+        }
+        return sent
+    }
+
     /**
      * Transmit command through the serialized GATT write queue.
      */
@@ -333,7 +369,9 @@ class BleManager(
         }
         val sent = commandQueue.enqueue(command, isEmergency)
         if (sent) {
-            log(BleLogType.TX_CMD, "TX: $command")
+            if (command != com.oddbox.armcontroller.domain.model.ArmCommand.STOP) {
+                log(BleLogType.TX_CMD, "TX: $command")
+            }
         } else {
             log(BleLogType.ERROR, "TX FAILED: $command")
         }

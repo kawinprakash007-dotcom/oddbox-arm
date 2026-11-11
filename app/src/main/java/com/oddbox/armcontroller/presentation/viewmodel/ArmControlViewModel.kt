@@ -29,8 +29,17 @@ class ArmControlViewModel(
 
     private val movementController = MovementHeartbeatController(
         scope = viewModelScope,
-        sendCommandAction = { cmd ->
-            repository.sendCommand(cmd, false)
+        sendMovementAction = { cmd, epoch ->
+            repository.sendMovementCommand(cmd, epoch)
+        },
+        queueStopImmediateAction = { reason ->
+            repository.queueStopImmediate(reason)
+        },
+        invalidateMovementQueueAction = {
+            repository.invalidateMovementQueue("Movement superseded")
+        },
+        currentEpochProvider = {
+            repository.currentMovementEpoch()
         },
         heartbeatIntervalMs = 200L
     )
@@ -51,7 +60,6 @@ class ArmControlViewModel(
                 _uiState.update { it.copy(connectionState = state) }
                 if (state == BleConnectionState.DISCONNECTED) {
                     safetyManager.onDisconnection()
-                    movementController.forceStop()
                 }
             }
         }
@@ -138,9 +146,13 @@ class ArmControlViewModel(
     }
 
     fun disconnectDevice() {
-        movementController.forceStop()
-        safetyManager.onDisconnection()
-        repository.disconnect()
+        movementController.forceStop("User disconnect")
+        viewModelScope.launch {
+            // Brief window for prioritized STOP packet to hit the BLE radio before GATT closes.
+            kotlinx.coroutines.delay(50L)
+            safetyManager.onDisconnection()
+            repository.disconnect()
+        }
     }
 
     // --- Directional Press-and-Hold Movement ---
@@ -154,7 +166,7 @@ class ArmControlViewModel(
     }
 
     fun onMovementCancelled() {
-        movementController.forceStop()
+        movementController.forceStop("Movement cancelled")
     }
 
     // --- Speed Selection ---
@@ -201,11 +213,18 @@ class ArmControlViewModel(
 
     // --- Dialogs & Panels ---
     fun setShowScanDialog(show: Boolean) {
-        if (!show) repository.stopScan()
+        if (show) {
+            movementController.forceStop("Scan dialog opened")
+        } else {
+            repository.stopScan()
+        }
         _uiState.update { it.copy(showScanDialog = show) }
     }
 
     fun setShowSettingsDialog(show: Boolean) {
+        if (show) {
+            movementController.forceStop("Settings dialog opened")
+        }
         _uiState.update { it.copy(showSettingsDialog = show) }
     }
 
@@ -222,12 +241,12 @@ class ArmControlViewModel(
     }
 
     fun onAppBackgrounded() {
-        movementController.forceStop()
+        movementController.forceStop("App backgrounded")
     }
 
     override fun onCleared() {
         super.onCleared()
-        movementController.forceStop()
+        movementController.forceStop("ViewModel cleared")
         repository.release()
     }
 

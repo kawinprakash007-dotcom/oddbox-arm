@@ -30,7 +30,7 @@ class ArmSafetyManager(
     fun triggerEmergencyStop() {
         _isEmergencyStopped.value = true
         _isMagnetArmingUnlocked.value = false
-        movementController.forceStop()
+        movementController.forceStop("Emergency stop")
 
         scope.launch {
             onLog("EMERGENCY STOP TRIGGERED! Shutting down movement & magnet.", true)
@@ -64,7 +64,7 @@ class ArmSafetyManager(
      * Called when connection is lost to clean up safety states.
      */
     fun onDisconnection() {
-        movementController.forceStop()
+        movementController.forceStop("BLE disconnected")
         _isMagnetArmingUnlocked.value = false
     }
 }

@@ -169,6 +169,7 @@ fun ServoStatusCard(
             ) {
                 DirectionButton(
                     text = primaryDirection.label,
+                    commandName = primaryDirection.command,
                     icon = primaryIcon,
                     enabled = enabled,
                     isExternalActive = activeDirection == primaryDirection,
@@ -179,6 +180,7 @@ fun ServoStatusCard(
 
                 DirectionButton(
                     text = secondaryDirection.label,
+                    commandName = secondaryDirection.command,
                     icon = secondaryIcon,
                     enabled = enabled,
                     isExternalActive = activeDirection == secondaryDirection,

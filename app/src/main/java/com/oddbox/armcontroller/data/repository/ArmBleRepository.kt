@@ -81,6 +81,22 @@ class ArmBleRepository(
         bleManager.disconnect()
     }
 
+    override fun currentMovementEpoch(): Long {
+        return bleManager.currentMovementEpoch()
+    }
+
+    override fun invalidateMovementQueue(reason: String): Long {
+        return bleManager.invalidateMovementQueue(reason)
+    }
+
+    override fun queueStopImmediate(reason: String) {
+        bleManager.queueStopImmediate(reason)
+    }
+
+    override suspend fun sendMovementCommand(command: String, epoch: Long): Boolean {
+        return bleManager.sendMovementCommand(command, epoch)
+    }
+
     override suspend fun sendCommand(command: String, isEmergency: Boolean): Boolean {
         return bleManager.sendCommand(command, isEmergency)
     }

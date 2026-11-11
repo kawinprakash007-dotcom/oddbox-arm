@@ -129,10 +129,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Safety requirement: losing foreground/resumed state halts physical movement immediately
+        viewModel.onAppBackgrounded()
+    }
+
     override fun onStop() {
         super.onStop()
         // Safety requirement: Backgrounding halts physical movement immediately
         viewModel.onAppBackgrounded()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Notification shade / permission dialog / system overlay interrupts touch input
+        if (!hasFocus) {
+            viewModel.onMovementCancelled()
+        }
     }
 }
 

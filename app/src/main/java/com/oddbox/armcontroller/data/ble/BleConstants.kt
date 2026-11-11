@@ -18,11 +18,17 @@ object BleConstants {
     // Standard Client Characteristic Configuration Descriptor (CCCD)
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
+    // Logcat Tag
+    const val LOG_TAG = "ODDBOX_BLE"
+
     // Timing Constants
     const val ESP32_COMMAND_TIMEOUT_MS = 600L          // Firmware drops movement if no refresh within 600ms
     const val HEARTBEAT_INTERVAL_MS = 200L             // Safe repeat interval while button held
     const val GATT_WRITE_TIMEOUT_MS = 1000L            // Per-command GATT response timeout (write-with-response)
-    const val NO_RESPONSE_INTER_WRITE_DELAY_MS = 20L   // Gap between WRITE_NO_RESPONSE packets (ESP32 buffer)
+    const val NO_RESPONSE_INTER_WRITE_DELAY_MS = 20L   // Fallback gap if write callback doesn't fire
+    const val WRITE_SETTLE_TIMEOUT_MS = 35L            // Short cap waiting for onCharacteristicWrite to clear mDeviceBusy
+    const val STOP_MAX_WRITE_RETRIES = 12              // Ensure STOP/ESTOP never drop on temporary BUSY
+    const val STOP_RETRY_DELAY_MS = 15L
     const val BLE_SCAN_PERIOD_MS = 12000L              // Scan stops automatically after 12s
     const val RECONNECT_DELAY_MS = 3000L               // Reconnect delay
     const val MAX_RECONNECT_ATTEMPTS = 3

@@ -1,7 +1,7 @@
 package com.oddbox.armcontroller.domain.controller
 
 import com.oddbox.armcontroller.data.ble.BleConstants
-import com.oddbox.armcontroller.domain.model.ArmCommand
+import com.oddbox.armcontroller.data.ble.BleDebugLog
 import com.oddbox.armcontroller.domain.model.ArmDirection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,84 +12,123 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 
+/**
+ * Owns press-and-hold directional heartbeat lifecycle.
+ *
+ * All start / stop / force-stop state transitions serialize under [stateLock]
+ * synchronously on the caller thread, atomically advancing [generation] and the
+ * queue epoch via [invalidateMovementQueueAction] + [queueStopImmediateAction].
+ * This eliminates coroutine cancellation races where an in-flight heartbeat could
+ * push a movement packet into the BLE queue after STOP.
+ */
 class MovementHeartbeatController(
     private val scope: CoroutineScope,
-    private val sendCommandAction: suspend (String) -> Boolean,
+    private val sendMovementAction: suspend (command: String, epoch: Long) -> Boolean,
+    private val queueStopImmediateAction: (reason: String) -> Unit,
+    private val invalidateMovementQueueAction: () -> Long,
+    private val currentEpochProvider: () -> Long,
     var heartbeatIntervalMs: Long = BleConstants.HEARTBEAT_INTERVAL_MS
 ) {
     private val _activeDirection = MutableStateFlow<ArmDirection?>(null)
     val activeDirection: StateFlow<ArmDirection?> = _activeDirection.asStateFlow()
 
-    // Single serialized control job — replaced atomically on each press/release.
-    // Using a plain @Volatile reference avoids the mutex-ordering race where
-    // stopMovement's launch() can be scheduled before startMovement's inner work
-    // executes, letting a direction command leak out after the STOP.
-    @Volatile private var heartbeatJob: Job? = null
+    private val stateLock = Any()
+    private val generation = AtomicLong(0L)
+    private var heartbeatJob: Job? = null
 
     /**
-     * Called from the UI thread (Compose pointer input) on finger-DOWN.
-     * Cancels any existing movement job first, marks the new direction, then
-     * starts the heartbeat loop. The initial command and all heartbeats run
-     * inside the job so they are automatically cancelled on release.
+     * Triggered synchronously on finger DOWN.
+     * Immediately dispatches the initial command and repeats at [heartbeatIntervalMs]
+     * (< 600ms ESP32 watchdog) until released, cancelled, disabled, or backgrounded.
      */
     fun startMovement(direction: ArmDirection) {
-        // Cancel whatever was running (may already be null — that's fine)
-        heartbeatJob?.cancel()
+        synchronized(stateLock) {
+            val previous = _activeDirection.value
+            val myGen = generation.incrementAndGet()
+            heartbeatJob?.cancel()
+            heartbeatJob = null
 
-        _activeDirection.value = direction
+            if (previous != null && previous != direction) {
+                // Conflicting axis/direction pressed while another was held: halt old axis cleanly first.
+                BleDebugLog.d("HEARTBEAT_CANCELLED")
+                queueStopImmediateAction("Direction switch to ${direction.command}")
+            }
 
-        heartbeatJob = scope.launch(Dispatchers.Default) {
-            try {
-                // 1. Send the first command immediately on press
-                sendCommandAction(direction.command)
+            val myEpoch = invalidateMovementQueueAction()
+            _activeDirection.value = direction
 
-                // 2. Heartbeat: keep refreshing well inside the 600ms ESP32 watchdog
-                while (isActive) {
-                    delay(heartbeatIntervalMs)
-                    if (isActive) sendCommandAction(direction.command)
+            heartbeatJob = scope.launch(Dispatchers.Default) {
+                if (!shouldContinue(myGen, myEpoch, direction)) return@launch
+
+                // 1. Send initial movement command immediately
+                if (sendMovementAction(direction.command, myEpoch) && shouldContinue(myGen, myEpoch, direction)) {
+                    BleDebugLog.d("HEARTBEAT_SENT: ${direction.command}")
                 }
-            } finally {
-                // finally{} runs when the job is cancelled (finger released)
-                // or when the coroutine finishes naturally.
-                // Do NOT send STOP here — stopMovement() sends it explicitly
-                // so we don't double-stop if another direction supersedes this one.
+
+                // 2. Heartbeat loop — strictly exits on cancellation, generation bump, or epoch bump
+                while (shouldContinue(myGen, myEpoch, direction)) {
+                    delay(heartbeatIntervalMs)
+                    if (!shouldContinue(myGen, myEpoch, direction)) break
+                    if (sendMovementAction(direction.command, myEpoch) && shouldContinue(myGen, myEpoch, direction)) {
+                        BleDebugLog.d("HEARTBEAT_SENT: ${direction.command}")
+                    }
+                }
             }
         }
     }
 
+    private fun kotlinx.coroutines.CoroutineScope.shouldContinue(
+        expectedGen: Long,
+        expectedEpoch: Long,
+        direction: ArmDirection
+    ): Boolean {
+        return isActive &&
+            generation.get() == expectedGen &&
+            _activeDirection.value == direction &&
+            currentEpochProvider() == expectedEpoch
+    }
+
     /**
-     * Called from the UI thread (Compose pointer input) on finger-UP or gesture
-     * cancellation. Cancels the heartbeat immediately, clears the active
-     * direction, and sends STOP. Passing [direction] makes it a no-op when a
-     * *different* direction has already taken over (multi-touch safety).
+     * Triggered synchronously on finger UP, gesture cancellation, or button disable.
+     * Cancels heartbeat synchronously, invalidates stale movement commands, and
+     * queues STOP at highest priority before releasing the lock.
      */
     fun stopMovement(direction: ArmDirection? = null) {
-        val current = _activeDirection.value
-        if (direction != null && current != direction) return  // different axis — ignore
+        synchronized(stateLock) {
+            val current = _activeDirection.value
+            if (direction != null && current != direction) {
+                // A newer direction has already taken over (multi-touch handoff) or already stopped.
+                return
+            }
 
-        heartbeatJob?.cancel()
-        heartbeatJob = null
-        _activeDirection.value = null
+            generation.incrementAndGet()
+            heartbeatJob?.cancel()
+            heartbeatJob = null
+            _activeDirection.value = null
 
-        // Send STOP asynchronously — avoids blocking the UI thread
-        scope.launch(Dispatchers.Default) {
-            sendCommandAction(ArmCommand.STOP)
+            BleDebugLog.d("HEARTBEAT_CANCELLED")
+            queueStopImmediateAction("Release ${direction?.command ?: "MANUAL"}")
         }
     }
 
     /**
-     * Force-stops everything: app backgrounding, disconnect, ESTOP reset.
-     * Safe to call from any thread.
+     * Unconditional halt for app backgrounding, window focus loss, navigation,
+     * BLE disconnect, or Emergency Stop.
      */
-    fun forceStop() {
-        heartbeatJob?.cancel()
-        heartbeatJob = null
-        _activeDirection.value = null
+    fun forceStop(reason: String = "Force stop") {
+        synchronized(stateLock) {
+            val wasActive = _activeDirection.value != null || heartbeatJob != null
+            generation.incrementAndGet()
+            heartbeatJob?.cancel()
+            heartbeatJob = null
+            _activeDirection.value = null
 
-        scope.launch(Dispatchers.Default) {
-            sendCommandAction(ArmCommand.STOP)
+            if (wasActive) {
+                BleDebugLog.d("HEARTBEAT_CANCELLED")
+            }
+            queueStopImmediateAction(reason)
         }
     }
 }
-

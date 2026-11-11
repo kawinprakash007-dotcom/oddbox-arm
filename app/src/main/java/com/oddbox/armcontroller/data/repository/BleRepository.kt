@@ -19,6 +19,10 @@ interface BleRepository {
     fun stopScan()
     fun connect(address: String): Boolean
     fun disconnect()
+    fun currentMovementEpoch(): Long
+    fun invalidateMovementQueue(reason: String): Long
+    fun queueStopImmediate(reason: String = "Release")
+    suspend fun sendMovementCommand(command: String, epoch: Long): Boolean
     suspend fun sendCommand(command: String, isEmergency: Boolean = false): Boolean
     fun clearLogs()
     fun release()

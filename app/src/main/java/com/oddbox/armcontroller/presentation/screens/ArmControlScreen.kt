@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -75,6 +76,13 @@ fun ArmControlScreen(
 ) {
     val scrollState = rememberScrollState()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Safety net: leaving/disposing the control screen (e.g. navigation) stops movement immediately.
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.onMovementCancelled()
+        }
+    }
 
     LaunchedEffect(uiState.statusBanner) {
         val banner = uiState.statusBanner
