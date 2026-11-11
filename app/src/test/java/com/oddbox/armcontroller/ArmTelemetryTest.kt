@@ -99,3 +99,4 @@ class ArmTelemetryTest {
         assertEquals("SPEED:3", ArmSpeed.FAST.command)
     }
 }
+

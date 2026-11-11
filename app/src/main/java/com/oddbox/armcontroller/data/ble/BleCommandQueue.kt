@@ -12,8 +12,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
-import java.util.concurrent.atomic.AtomicBoolean
 
 class BleCommandQueue(
     private val scope: CoroutineScope,
@@ -27,11 +25,9 @@ class BleCommandQueue(
     )
 
     private val queueChannel = Channel<WriteRequest>(capacity = Channel.UNLIMITED)
-    private val isProcessing = AtomicBoolean(false)
     private val activeGattRef = java.util.concurrent.atomic.AtomicReference<BluetoothGatt?>(null)
     private val activeCharRef = java.util.concurrent.atomic.AtomicReference<BluetoothGattCharacteristic?>(null)
 
-    private var activeCompletion: CompletableDeferred<Boolean>? = null
     private var workerJob: Job? = null
     private val queueMutex = Mutex()
 
@@ -63,24 +59,24 @@ class BleCommandQueue(
         }
 
         queueMutex.withLock {
-            val deferred = CompletableDeferred<Boolean>()
-            activeCompletion = deferred
-
+            // Use WRITE_TYPE_NO_RESPONSE — the ESP32 firmware command characteristic has
+            // PROPERTY_WRITE | PROPERTY_WRITE_NR. With WRITE_TYPE_DEFAULT Android waits for a
+            // GATT ATT confirmation that the ESP32 BLE stack never sends for WR-NR operations,
+            // causing every write to time-out. WRITE_TYPE_NO_RESPONSE fires-and-forgets at the
+            // ATT layer and onCharacteristicWrite is NOT guaranteed to be called — that is correct.
             val writeInitiated = try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    val writeType = if (request.isEmergency) {
-                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    } else {
-                        // Use WRITE_TYPE_DEFAULT for reliable confirmed delivery
-                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    }
-                    val res = gatt.writeCharacteristic(characteristic, request.payload, writeType)
+                    val res = gatt.writeCharacteristic(
+                        characteristic,
+                        request.payload,
+                        BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                    )
                     res == BluetoothGatt.GATT_SUCCESS || res == 0
                 } else {
                     @Suppress("DEPRECATION")
                     characteristic.value = request.payload
                     @Suppress("DEPRECATION")
-                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
                     @Suppress("DEPRECATION")
                     gatt.writeCharacteristic(characteristic)
                 }
@@ -94,35 +90,28 @@ class BleCommandQueue(
 
             if (!writeInitiated) {
                 onLog("Failed to initiate GATT write for '${request.command}'", true)
-                activeCompletion = null
                 request.completion.complete(false)
                 return@withLock
             }
 
-            // Wait for GATT callback with timeout
-            val success = withTimeoutOrNull(BleConstants.GATT_WRITE_TIMEOUT_MS) {
-                deferred.await()
-            } ?: false
-
-            activeCompletion = null
-            if (!success) {
-                onLog("GATT write timed out or rejected for '${request.command}'", true)
-            }
-            request.completion.complete(success)
+            // For WRITE_TYPE_NO_RESPONSE the ATT layer sends no confirmation — complete immediately.
+            // Add a small inter-write gap so the ESP32 BLE stack has time to process each packet.
+            request.completion.complete(true)
+            delay(BleConstants.NO_RESPONSE_INTER_WRITE_DELAY_MS)
         }
     }
 
     /**
-     * Called by BluetoothGattCallback.onCharacteristicWrite
+     * Called by BluetoothGattCallback.onCharacteristicWrite — kept for API compatibility
+     * but not relied upon for WRITE_TYPE_NO_RESPONSE operations.
      */
     fun onWriteCompleted(status: Int) {
-        val isOk = status == BluetoothGatt.GATT_SUCCESS
-        activeCompletion?.complete(isOk)
+        // No-op for WRITE_NR path; retained so BleManager.onCharacteristicWrite compiles cleanly.
     }
 
     /**
      * Enqueues a command for serialized transmission.
-     * Returns true if successfully delivered & confirmed by GATT layer.
+     * Returns true if the write was successfully initiated to the BLE stack.
      */
     suspend fun enqueue(command: String, isEmergency: Boolean = false): Boolean {
         val payload = (command + "\n").toByteArray(Charsets.UTF_8)
@@ -143,8 +132,6 @@ class BleCommandQueue(
     fun clearQueue(reason: String) {
         scope.launch {
             queueMutex.withLock {
-                activeCompletion?.complete(false)
-                activeCompletion = null
                 // Drain channel
                 var drainedCount = 0
                 while (true) {

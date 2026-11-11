@@ -141,14 +141,17 @@ class BleManager(
                 return
             }
 
+            // Bind command queue before anything else so commands can flow
+            commandQueue.bind(gatt, commandCharacteristic)
+
             if (statusCharacteristic == null) {
-                log(BleLogType.ERROR, "Status characteristic (${BleConstants.STATUS_CHAR_UUID}) NOT found!")
-                disconnect()
+                // Firmware does not (yet) expose the status characteristic — that is OK.
+                // We can still send commands; we just won't receive telemetry.
+                log(BleLogType.CONNECTION, "Status characteristic (${BleConstants.STATUS_CHAR_UUID}) not found — " +
+                        "command-only mode. Flash updated firmware to enable telemetry.")
+                finalizeConnection(gatt)
                 return
             }
-
-            // Bind command queue to this GATT instance
-            commandQueue.bind(gatt, commandCharacteristic)
 
             // Subscribe to status characteristic notifications
             subscribeToStatusNotifications(gatt, statusCharacteristic!!)
@@ -181,12 +184,13 @@ class BleManager(
                     @Suppress("DEPRECATION")
                     gatt.writeDescriptor(descriptor)
                 }
-                log(BleLogType.CONNECTION, "Subscribed to status notifications via CCCD")
+                log(BleLogType.CONNECTION, "CCCD write initiated — awaiting onDescriptorWrite callback...")
+                // finalizeConnection is called in onDescriptorWrite (see below)
             } catch (e: Exception) {
                 log(BleLogType.ERROR, "Exception writing CCCD descriptor: ${e.message}")
+                // Fall back: still declare connected so user can send commands
+                finalizeConnection(gatt)
             }
-
-            finalizeConnection(gatt)
         }
 
         @SuppressLint("MissingPermission")
@@ -238,10 +242,15 @@ class BleManager(
             descriptor: BluetoothGattDescriptor?,
             status: Int
         ) {
+            if (gatt == null) return
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                log(BleLogType.CONNECTION, "CCCD descriptor write confirmed: Notifications active")
+                log(BleLogType.CONNECTION, "CCCD write confirmed — status notifications active")
             } else {
-                log(BleLogType.ERROR, "CCCD descriptor write failed with status $status")
+                log(BleLogType.ERROR, "CCCD descriptor write failed (status $status) — continuing without telemetry")
+            }
+            // Finalize connection regardless: if CCCD fails we still want command-sending to work
+            if (_connectionState.value != BleConnectionState.CONNECTED) {
+                finalizeConnection(gatt)
             }
         }
     }
@@ -324,9 +333,9 @@ class BleManager(
         }
         val sent = commandQueue.enqueue(command, isEmergency)
         if (sent) {
-            log(BleLogType.TX_CMD, "TX: $command (ACK)")
+            log(BleLogType.TX_CMD, "TX: $command")
         } else {
-            log(BleLogType.ERROR, "TX FAILED: $command (NO ACK)")
+            log(BleLogType.ERROR, "TX FAILED: $command")
         }
         return sent
     }
