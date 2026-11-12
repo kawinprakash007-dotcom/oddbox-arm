@@ -1,13 +1,36 @@
-*.iml
+# Gradle & Kotlin caches
 .gradle
-/local.properties
-local.properties
-/.idea/
-.DS_Store
+.gradle/
+.kotlin/
 build/
 **/build/
 /build
 .externalNativeBuild
 .cxx
 
+# Android Studio / IntelliJ IDEA
+*.iml
+/.idea/
+.DS_Store
+captures/
 
+# Local environment & build outputs
+/local.properties
+local.properties
+*.apk
+*.ap_
+*.aab
+
+# Signing keys, passwords, API keys, and secrets
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+signing.properties
+secrets.properties
+apikey.properties
+.env
+.env.*
