@@ -63,7 +63,7 @@ class MovementHeartbeatController(
                 if (!shouldContinue(myGen, myEpoch, direction)) return@launch
 
                 // 1. Send initial movement command immediately
-                if (sendMovementAction(direction.command, myEpoch) && shouldContinue(myGen, myEpoch, direction)) {
+                if (sendMovementAction(direction.command, myEpoch)) {
                     BleDebugLog.d("HEARTBEAT_SENT: ${direction.command}")
                 }
 
@@ -71,7 +71,7 @@ class MovementHeartbeatController(
                 while (shouldContinue(myGen, myEpoch, direction)) {
                     delay(heartbeatIntervalMs)
                     if (!shouldContinue(myGen, myEpoch, direction)) break
-                    if (sendMovementAction(direction.command, myEpoch) && shouldContinue(myGen, myEpoch, direction)) {
+                    if (sendMovementAction(direction.command, myEpoch)) {
                         BleDebugLog.d("HEARTBEAT_SENT: ${direction.command}")
                     }
                 }
